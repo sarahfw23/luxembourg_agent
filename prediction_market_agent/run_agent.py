@@ -43,6 +43,9 @@ from prediction_market_agent.agents.known_outcome_agent.deploy import (
     DeployableKnownOutcomeAgent,
 )
 from prediction_market_agent.agents.logprobs_agent.deploy import DeployableLogProbsAgent
+from prediction_market_agent.agents.luxembourg1_agent.deploy import (
+    DeployableLuxembourg1Agent,
+)
 from prediction_market_agent.agents.metaculus_agent.deploy import (
     DeployableMetaculusBotTournamentAgent,
 )
@@ -162,6 +165,7 @@ class RunnableAgent(str, Enum):
     prophet_gpt4o_scalar = "prophet_gpt4o_scalar"
     skew_agent = "skew_agent"
     performance_alert = "performance_alert"
+    luxembourg1 = "luxembourg1"
 
 
 RUNNABLE_AGENTS: dict[RunnableAgent, type[DeployableAgent]] = {
@@ -221,6 +225,7 @@ RUNNABLE_AGENTS: dict[RunnableAgent, type[DeployableAgent]] = {
     RunnableAgent.prophet_gpt4o_scalar: DeployablePredictionProphetGPT4oAgentScalar,
     RunnableAgent.skew_agent: SkewAgent,
     RunnableAgent.performance_alert: PerformanceAlertAgent,
+    RunnableAgent.luxembourg1: DeployableLuxembourg1Agent,
 }
 
 APP = typer.Typer(pretty_exceptions_enable=False)

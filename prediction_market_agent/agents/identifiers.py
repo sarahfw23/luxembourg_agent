@@ -14,6 +14,7 @@ MICROCHAIN_AGENT_STREAMLIT = AgentIdentifier("microchain-streamlit-app")
 MICROCHAIN_AGENT_OMEN_WITH_GOAL_MANAGER = AgentIdentifier(
     "trader-agent-0-with-goal-manager"
 )
+LUXEMBOURG1 = AgentIdentifier("luxembourg1")
 
 
 def build_nft_treasury_game_agent_identifier(base_name: str) -> AgentIdentifier:
