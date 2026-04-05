@@ -118,8 +118,8 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
     def get_betting_strategy(self, market: AgentMarket) -> BettingStrategy:
                 return FullBinaryKellyBettingStrategy(
             max_position_amount=get_maximum_possible_bet_amount(
-                min_=USD(0.005),
-                max_=USD(0.02),
+                min_=USD(0.01),
+                max_=USD(0.5),
                 trading_balance=market.get_trade_balance(APIKeys()),
             ),
             max_price_impact=0.05, 
