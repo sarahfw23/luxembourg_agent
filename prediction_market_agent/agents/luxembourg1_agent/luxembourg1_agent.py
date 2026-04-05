@@ -21,6 +21,8 @@ Focus ONLY on the raw facts and positive momentum that support a YES outcome.
 Be direct, technical, and concise. Pick the strongest path to YES.
 
 QUESTION: {question}
+CURRENT DATE: {current_date}
+MARKET CLOSES: {closing_date}
 
 RESEARCH REPORT:
 {research}
@@ -33,6 +35,8 @@ Focus ONLY on the raw facts and negative pressures that support a NO outcome.
 Be direct, technical, and concise. Pick the strongest path to NO.
 
 QUESTION: {question}
+CURRENT DATE: {current_date}
+MARKET CLOSES: {closing_date}
 
 RESEARCH REPORT:
 {research}
@@ -43,6 +47,8 @@ You are the MODERATOR agent. Deliver a definitive numerical probability.
 Evaluate the BULL and BEAR arguments against the raw research facts.
 
 QUESTION: {question}
+CURRENT DATE: {current_date}
+MARKET CLOSES: {closing_date}
 
 RESEARCH REPORT:
 {research}
@@ -59,6 +65,7 @@ INSTRUCTIONS:
 3. Provide a final probability estimate.
 4. ZERO HEDGING. Do not say "it depends" or "information is mixed". 
 5. Pick the most likely outcome based on the available data. If data is sparse, make your best professional estimate regardless.
+6. IMPORTANT: The market closes on {closing_date} (today is {current_date}). Factor in how much time remains — if the deadline has nearly passed with no news, that is strong evidence.
 
 OUTPUT_FORMAT:
 * Your output response must be only a single JSON object.
@@ -80,7 +87,12 @@ class Luxembourg1Agent:
         self.moderator_llm = moderator_llm
 
     @observe()
-    async def debate(self, question: str, research_report: str) -> ProbabilisticAnswer:
+    async def debate(
+        self,
+        question: str,
+        research_report: str,
+        closing_date: str = "Unknown",
+    ) -> ProbabilisticAnswer:
         # Instantiate debate agents
         bull_agent = Agent(self.debate_llm, model_settings=ModelSettings(temperature=0.7))
         bear_agent = Agent(self.debate_llm, model_settings=ModelSettings(temperature=0.7))
@@ -90,8 +102,16 @@ class Luxembourg1Agent:
 
         # Run Bull and Bear arguments
         logger.info("Generating Bull argument (Expert 1)...")
+        from prediction_market_agent_tooling.tools.utils import utcnow
+        current_date = utcnow().strftime("%Y-%m-%d")
+        prompt_kwargs = dict(
+            question=question,
+            research=research_report,
+            current_date=current_date,
+            closing_date=closing_date,
+        )
         bull_resp = await bull_agent.run(
-            BULL_PROMPT.format(question=question, research=research_report)
+            BULL_PROMPT.format(**prompt_kwargs)
         )
         # pydantic-ai v0.0.17+ returns an AgentRunResult with `.output`
         bull_argument = bull_resp.output
@@ -99,7 +119,7 @@ class Luxembourg1Agent:
 
         logger.info("Generating Bear argument (Expert 2)...")
         bear_resp = await bear_agent.run(
-            BEAR_PROMPT.format(question=question, research=research_report)
+            BEAR_PROMPT.format(**prompt_kwargs)
         )
         bear_argument = bear_resp.output
         logger.info(f"--- BEAR EXPERT ARGUMENT ---\n{bear_argument}\n")
@@ -108,10 +128,9 @@ class Luxembourg1Agent:
         logger.info("Moderating debate (The Panel)...")
         moderator_resp = await moderator_agent.run(
             MODERATOR_PROMPT.format(
-                question=question,
-                research=research_report,
+                **prompt_kwargs,
                 bull_argument=bull_argument,
-                bear_argument=bear_argument
+                bear_argument=bear_argument,
             )
         )
         
@@ -138,7 +157,11 @@ class Luxembourg1Agent:
             )
             raise
 
-    def predict(self, market_question: str) -> Prediction:
+    def predict(
+        self,
+        market_question: str,
+        closing_date: str = "Unknown",
+    ) -> Prediction:
         import asyncio
         import nest_asyncio
         nest_asyncio.apply()
@@ -151,7 +174,13 @@ class Luxembourg1Agent:
             # 2. Debate
             logger.info("PHASE 2: THE EXPERTS (Starting adversarial debate...)")
             loop = asyncio.get_event_loop()
-            answer = loop.run_until_complete(self.debate(market_question, research.report))
+            answer = loop.run_until_complete(
+                self.debate(
+                    market_question,
+                    research.report,
+                    closing_date=closing_date,
+                )
+            )
             
             return Prediction(outcome_prediction=CategoricalProbabilisticAnswer.from_probabilistic_answer(answer))
         except Exception as e:

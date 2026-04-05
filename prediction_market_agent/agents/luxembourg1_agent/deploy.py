@@ -4,8 +4,6 @@ from prediction_market_agent_tooling.deploy.agent import DeployableTraderAgent
 
 # Silence Langfuse warnings if keys aren't set
 logging.getLogger("langfuse").setLevel(logging.ERROR)
-if os.environ.get("DRY_RUN") == "1":
-    os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 from prediction_market_agent_tooling.deploy.betting_strategy import (
     BettingStrategy,
     FullBinaryKellyBettingStrategy,
@@ -29,7 +27,7 @@ from prediction_prophet.benchmark.agents import (
     PredictionProphetAgent,
 )
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.settings import ModelSettings
 
 from prediction_market_agent.agents.luxembourg1_agent.luxembourg1_agent import Luxembourg1Agent
@@ -48,15 +46,25 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
     """
     agent: Luxembourg1Agent
     
-    # In dry run, we strictly only fetch and process 1 market to save credits.
-    n_markets_to_fetch = 1 if os.environ.get("DRY_RUN") == "1" else 10
-    bet_on_n_markets_per_run = 1 # only for dry run
-    get_markets_sort_by = SortBy.NEWEST
+    # Default to closing soonest so we test markets that resolve first.
+    # You can override counts via env vars.
+    get_markets_sort_by = SortBy.NONE
+
+    # Defaults can be overridden via env vars.
+    n_markets_to_fetch = int(os.environ.get("LUXEMBOURG1_N_MARKETS_TO_FETCH", "10"))
+    bet_on_n_markets_per_run = int(
+        os.environ.get("LUXEMBOURG1_BET_ON_N_MARKETS_PER_RUN", "3")
+    )
+    
+    # --- Profitability Filters (Configurable via env vars) ---
+    CONFIDENCE_THRESHOLD = float(os.environ.get("LUXEMBOURG1_CONFIDENCE_THRESHOLD", "0.7"))
+    INDECISION_BUFFER = float(os.environ.get("LUXEMBOURG1_INDECISION_BUFFER", "0.1")) # 0.1 = skip 0.4 to 0.6
 
     def load(self) -> None:
         super().load()
-        model = "gpt-4o-2024-08-06"
-        reasoning_model = "o3-mini-2025-01-31"
+        # Defaults: efficient + strong (can be overridden via env vars).
+        model = os.environ.get("LUXEMBOURG1_MODEL", "gpt-5.4-mini")
+        reasoning_model = os.environ.get("LUXEMBOURG1_REASONING_MODEL", "gpt-5.4")
         api_keys = APIKeys()
         
         # Staleness Detection Cache
@@ -71,13 +79,13 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
         # THE LIBRARIAN (Prophet Research Agent)
         # ---------------------------------------------------------------------
         # This agent uses tools (web search, scraping) to gather facts.
-        openai_model = OpenAIModel(
+        openai_model = OpenAIChatModel(
             model,
             provider=get_openai_provider(api_key=api_keys.openai_api_key),
         )
         # Use a dedicated reasoning model (o3-mini) for the final moderation step,
         # as suggested in the Prophet++ blueprint.
-        reasoning_openai_model = OpenAIModel(
+        reasoning_openai_model = OpenAIChatModel(
             reasoning_model,
             provider=get_openai_provider(api_key=api_keys.openai_api_key),
         )
@@ -108,15 +116,14 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
         )
 
     def get_betting_strategy(self, market: AgentMarket) -> BettingStrategy:
-        # Optimized for ~50 cent balance:
-        return FullBinaryKellyBettingStrategy(
+                return FullBinaryKellyBettingStrategy(
             max_position_amount=get_maximum_possible_bet_amount(
-                min_=USD(0.01),
-                max_=USD(0.50),
+                min_=USD(0.005),
+                max_=USD(0.02),
                 trading_balance=market.get_trade_balance(APIKeys()),
             ),
             max_price_impact=0.05, 
-        )
+        ) 
 
     def verify_market(self, market_type: MarketType, market: AgentMarket) -> bool:
         if not super().verify_market(market_type, market):
@@ -146,16 +153,39 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
         logger.info(f"No fresh news for '{market.question}' since last trade. Skipping.")
         return False
 
-    def check_min_required_balance_to_trade(self, market: AgentMarket) -> None:
-        if os.environ.get("DRY_RUN") == "1":
-            logger.info("DRY_RUN=1: Bypassing balance check for Luxembourg1.")
-            return
-        return super().check_min_required_balance_to_trade(market)
-
-
     def answer_binary_market(self, market: AgentMarket) -> ProbabilisticAnswer | None:
-        prediction = self.agent.predict(market.question)
+        closing_date = (
+            market.close_time.strftime("%Y-%m-%d")
+            if market.close_time is not None
+            else "Unknown"
+        )
+
+        prediction = self.agent.predict(
+            market.question,
+            closing_date=closing_date,
+        )
         if prediction is None or prediction.outcome_prediction is None:
+            return None
+            
+        # 1. Confidence Filter
+        p_yes = prediction.outcome_prediction.get_yes_probability()
+        if p_yes is None:
+             logger.warning(f"Could not find YES probability for '{market.question[:50]}...'. Skipping.")
+             return None
+
+        confidence = prediction.outcome_prediction.confidence
+
+        if confidence < self.CONFIDENCE_THRESHOLD:
+            logger.info(
+                f"Skipping '{market.question[:50]}...': Confidence too low ({confidence:.2f} < {self.CONFIDENCE_THRESHOLD})"
+            )
+            return None
+
+        # 2. Indecision Filter (Probability too close to 0.5)
+        if (0.5 - self.INDECISION_BUFFER) < float(p_yes) < (0.5 + self.INDECISION_BUFFER):
+            logger.info(
+                f"Skipping '{market.question[:50]}...': Probabilities too close to coin toss (P_YES={p_yes:.2f})"
+            )
             return None
         
         logger.info(
