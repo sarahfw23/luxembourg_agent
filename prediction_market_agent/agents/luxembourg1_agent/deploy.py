@@ -48,12 +48,12 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
     
     # Default to closing soonest so we test markets that resolve first.
     # You can override counts via env vars.
-    get_markets_sort_by = SortBy.NONE
+    get_markets_sort_by = SortBy.CLOSING_SOONEST
 
     # Defaults can be overridden via env vars.
     n_markets_to_fetch = int(os.environ.get("LUXEMBOURG1_N_MARKETS_TO_FETCH", "10"))
     bet_on_n_markets_per_run = int(
-        os.environ.get("LUXEMBOURG1_BET_ON_N_MARKETS_PER_RUN", "3")
+        os.environ.get("LUXEMBOURG1_BET_ON_N_MARKETS_PER_RUN", "10")
     )
     
     # --- Profitability Filters (Configurable via env vars) ---
@@ -118,8 +118,8 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
     def get_betting_strategy(self, market: AgentMarket) -> BettingStrategy:
                 return FullBinaryKellyBettingStrategy(
             max_position_amount=get_maximum_possible_bet_amount(
-                min_=USD(0.01),
-                max_=USD(0.5),
+                min_=USD(0.001),
+                max_=USD(0.01),
                 trading_balance=market.get_trade_balance(APIKeys()),
             ),
             max_price_impact=0.05, 
@@ -182,13 +182,34 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
             return None
 
         # 2. Indecision Filter (Probability too close to 0.5)
-        if (0.5 - self.INDECISION_BUFFER) < float(p_yes) < (0.5 + self.INDECISION_BUFFER):
+        p_yes_float = float(p_yes)
+        if (0.5 - self.INDECISION_BUFFER) < p_yes_float < (0.5 + self.INDECISION_BUFFER):
             logger.info(
-                f"Skipping '{market.question[:50]}...': Probabilities too close to coin toss (P_YES={p_yes:.2f})"
+                f"Skipping '{market.question[:50]}...': Probabilities too close to coin toss (P_YES={p_yes_float:.2f})"
             )
             return None
-        
+
+        # 3. Force p_yes to the agent's committed side so Kelly never bets opposite.
+        # A tiny nudge (+/- 0.001) ensures p_yes is strictly on the correct side of
+        # the market price, so Kelly sizes the bet in the direction the agent believes
+        # without ever flipping direction due to a near-neutral spread.
+        market_p_yes = float(market.p_yes)
+        if p_yes_float >= 0.5:
+            committed_p_yes = max(p_yes_float, market_p_yes + 0.001)
+        else:
+            committed_p_yes = min(p_yes_float, market_p_yes - 0.001)
+
         logger.info(
-            f"Luxembourg1 Answering '{market.question}' with '{prediction.outcome_prediction}'."
+            f"Market P_YES={market_p_yes:.3f}, Agent P_YES={p_yes_float:.3f} → "
+            f"Committed P_YES={committed_p_yes:.3f} → betting {'YES' if committed_p_yes >= 0.5 else 'NO'}"
         )
-        return prediction.outcome_prediction.to_probabilistic_answer()
+
+        answer = ProbabilisticAnswer(
+            p_yes=committed_p_yes,
+            confidence=confidence,
+        )
+        logger.info(
+            f"Returning answer: p_yes={float(answer.p_yes):.3f}, confidence={answer.confidence:.2f} → betting {'YES' if float(answer.p_yes) >= 0.5 else 'NO'}"
+        )
+        return answer
+
