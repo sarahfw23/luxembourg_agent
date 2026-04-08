@@ -8,6 +8,9 @@ from prediction_market_agent_tooling.deploy.betting_strategy import (
     BettingStrategy,
     FullBinaryKellyBettingStrategy,
 )
+from prediction_market_agent_tooling.deploy.betting_strategy import (
+    MaxAccuracyWithKellyScaledBetsStrategy,
+)
 from prediction_market_agent_tooling.gtypes import USD
 from prediction_market_agent_tooling.loggers import logger
 from prediction_market_agent_tooling.markets.agent_market import AgentMarket, SortBy
@@ -116,14 +119,13 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
         )
 
     def get_betting_strategy(self, market: AgentMarket) -> BettingStrategy:
-                return FullBinaryKellyBettingStrategy(
-            max_position_amount=get_maximum_possible_bet_amount(
-                min_=USD(0.001),
-                max_=USD(0.01),
-                trading_balance=market.get_trade_balance(APIKeys()),
-            ),
-            max_price_impact=0.05, 
-        ) 
+    return MaxAccuracyWithKellyScaledBetsStrategy(
+        max_position_amount=get_maximum_possible_bet_amount(
+            min_=USD(0.001),
+            max_=USD(0.01),
+            trading_balance=market.get_trade_balance(APIKeys()),
+        ),
+    )
 
     def verify_market(self, market_type: MarketType, market: AgentMarket) -> bool:
         if not super().verify_market(market_type, market):

@@ -15,10 +15,10 @@ from prediction_market_agent_tooling.loggers import logger
 # --- Prompts ---
 
 BULL_PROMPT = """
-You are the BULL agent. Argument for **YES**.
-Ignore the Librarian's 'Conclusion' or 'Caveats' in the report—they are too cautious.
-Focus ONLY on the raw facts and positive momentum that support a YES outcome.
-Be direct, technical, and concise. Pick the strongest path to YES.
+You are the BULL agent. Argue for **YES**.
+Focus on raw facts, confirmed events, and positive momentum from the report.
+Specific dated evidence is your strongest weapon — lead with it.
+Be direct and concise. Pick the strongest path to YES.
 
 QUESTION: {question}
 CURRENT DATE: {current_date}
@@ -29,10 +29,10 @@ RESEARCH REPORT:
 """
 
 BEAR_PROMPT = """
-You are the BEAR agent. Argument for **NO**.
-Ignore the Librarian's 'Conclusion' or 'Caveats' in the report—they are too cautious.
-Focus ONLY on the raw facts and negative pressures that support a NO outcome.
-Be direct, technical, and concise. Pick the strongest path to NO.
+You are the BEAR agent. Argue for **NO**.
+Focus on concrete reasons the event has NOT occurred or CANNOT occur by the deadline.
+Do NOT simply cast doubt on source attribution — identify specific failure conditions.
+Be direct and concise. Pick the strongest path to NO.
 
 QUESTION: {question}
 CURRENT DATE: {current_date}
@@ -66,6 +66,12 @@ INSTRUCTIONS:
 4. ZERO HEDGING. Do not say "it depends" or "information is mixed". 
 5. Pick the most likely outcome based on the available data. If data is sparse, make your best professional estimate regardless.
 6. IMPORTANT: The market closes on {closing_date} (today is {current_date}). Factor in how much time remains — if the deadline has nearly passed with no news, that is strong evidence.
+
+EVIDENCE WEIGHTING RULES (apply in order):
+- If the BULL argument contains specific, dated, named events that occurred BEFORE the market deadline, treat these as strong confirmation. Do not discount them merely because the BEAR raises abstract attribution uncertainty.
+- A BEAR argument that only says "we can't be 100% sure of the source" without disputing that the event occurred should be weighted LOW.
+- A BEAR argument that identifies a concrete reason the event did NOT happen (e.g. mission delayed, policy changed) should be weighted HIGH.
+- Confirmed specific evidence beats abstract skepticism. The market resolves on what happened, not on perfect documentation.
 
 OUTPUT_FORMAT:
 * Your output response must be only a single JSON object.
