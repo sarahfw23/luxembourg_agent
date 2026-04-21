@@ -25,6 +25,9 @@ class DBKeys(BaseSettings):
 
 
 class APIKeys(APIKeysBase):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
     OPENAI_API_KEY: t.Optional[SecretStr] = None
     OPENROUTER_API_KEY: t.Optional[SecretStr] = None
     ANTHROPIC_API_KEY: t.Optional[SecretStr] = None

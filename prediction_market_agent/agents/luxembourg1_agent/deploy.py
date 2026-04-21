@@ -49,19 +49,21 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
     """
     agent: Luxembourg1Agent
     
-    # Default to closing soonest so we test markets that resolve first.
-    # You can override counts via env vars.
-    get_markets_sort_by = SortBy.CLOSING_SOONEST
+    # Default to closing soonest to find markets in our desired window.
+    get_markets_sort_by = SortBy.NONE
 
     # Defaults can be overridden via env vars.
-    n_markets_to_fetch = int(os.environ.get("LUXEMBOURG1_N_MARKETS_TO_FETCH", "10"))
+    n_markets_to_fetch = int(os.environ.get("LUXEMBOURG1_N_MARKETS_TO_FETCH", "50"))
     bet_on_n_markets_per_run = int(
         os.environ.get("LUXEMBOURG1_BET_ON_N_MARKETS_PER_RUN", "10")
     )
     
-    # --- Profitability Filters (Configurable via env vars) ---
+    # --- Profitability & Timing Filters (Configurable via env vars) ---
     CONFIDENCE_THRESHOLD = float(os.environ.get("LUXEMBOURG1_CONFIDENCE_THRESHOLD", "0.7"))
     INDECISION_BUFFER = float(os.environ.get("LUXEMBOURG1_INDECISION_BUFFER", "0.1")) # 0.1 = skip 0.4 to 0.6
+    
+    MIN_DAYS_TO_CLOSING = float(os.environ.get("LUXEMBOURG1_MIN_DAYS_TO_CLOSING", "2"))
+    MAX_DAYS_TO_CLOSING = float(os.environ.get("LUXEMBOURG1_MAX_DAYS_TO_CLOSING", "6"))
 
     def load(self) -> None:
         super().load()
@@ -119,10 +121,10 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
         )
 
     def get_betting_strategy(self, market: AgentMarket) -> BettingStrategy:
-    return MaxAccuracyWithKellyScaledBetsStrategy(
-        max_position_amount=get_maximum_possible_bet_amount(
+        return MaxAccuracyWithKellyScaledBetsStrategy(
+            max_position_amount=get_maximum_possible_bet_amount(
             min_=USD(0.001),
-            max_=USD(0.01),
+            max_=USD(0.002),
             trading_balance=market.get_trade_balance(APIKeys()),
         ),
     )
@@ -131,7 +133,20 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
         if not super().verify_market(market_type, market):
             return False
 
-        # Staleness Detection:
+        # 1. Closing Date Filter:
+        if market.close_time is not None:
+            days_to_closing = (market.close_time - utcnow()).total_seconds() / 86400
+            if days_to_closing < self.MIN_DAYS_TO_CLOSING or days_to_closing > self.MAX_DAYS_TO_CLOSING:
+                logger.info(
+                    f"Skipping '{market.question[:50]}...': Closes in {days_to_closing:.2f} days "
+                    f"(Target: {self.MIN_DAYS_TO_CLOSING}-{self.MAX_DAYS_TO_CLOSING} days)"
+                )
+                return False
+        else:
+            logger.warning(f"Skipping '{market.question[:50]}...': Unknown closing time.")
+            return False
+
+        # 2. Staleness Detection:
         # Only trade if we have fresh news since our last trade, 
         # or if we have never traded on this market before.
         user_id = market.get_user_id(api_keys=APIKeys())
