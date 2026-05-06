@@ -55,15 +55,16 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
     # Defaults can be overridden via env vars.
     n_markets_to_fetch = int(os.environ.get("LUXEMBOURG1_N_MARKETS_TO_FETCH", "50"))
     bet_on_n_markets_per_run = int(
-        os.environ.get("LUXEMBOURG1_BET_ON_N_MARKETS_PER_RUN", "10")
+        os.environ.get("LUXEMBOURG1_BET_ON_N_MARKETS_PER_RUN", "25")
     )
     
     # --- Profitability & Timing Filters (Configurable via env vars) ---
     CONFIDENCE_THRESHOLD = float(os.environ.get("LUXEMBOURG1_CONFIDENCE_THRESHOLD", "0.7"))
     INDECISION_BUFFER = float(os.environ.get("LUXEMBOURG1_INDECISION_BUFFER", "0.1")) # 0.1 = skip 0.4 to 0.6
+    MARKET_EDGE_EPSILON = float(os.environ.get("LUXEMBOURG1_MARKET_EDGE_EPSILON", "0.001"))
     
-    MIN_DAYS_TO_CLOSING = float(os.environ.get("LUXEMBOURG1_MIN_DAYS_TO_CLOSING", "2"))
-    MAX_DAYS_TO_CLOSING = float(os.environ.get("LUXEMBOURG1_MAX_DAYS_TO_CLOSING", "6"))
+    MIN_DAYS_TO_CLOSING = float(os.environ.get("LUXEMBOURG1_MIN_DAYS_TO_CLOSING", "1"))
+    MAX_DAYS_TO_CLOSING = float(os.environ.get("LUXEMBOURG1_MAX_DAYS_TO_CLOSING", "5"))
 
     def load(self) -> None:
         super().load()
@@ -128,6 +129,54 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
             trading_balance=market.get_trade_balance(APIKeys()),
         ),
     )
+
+    def process_markets(self, market_type: MarketType) -> None:
+        logger.info("Start processing of markets.")
+        available_markets = self.get_markets(market_type)
+
+        logger.info(
+            f"Fetched {len(available_markets)=} markets to process, going to place up to "
+            f"{self.bet_on_n_markets_per_run=} markets with actual trades."
+        )
+        traded_markets = 0
+
+        for market_idx, market in enumerate(available_markets):
+            logger.info(
+                f"Going to process market {market.url}: {market_idx+1} / {len(available_markets)}."
+            )
+            self.before_process_market(market_type, market)
+            processed_market = self.process_market(market_type, market)
+            self.after_process_market(market_type, market, processed_market)
+
+            if processed_market is None:
+                logger.info(
+                    f"No prediction/trade generated for '{market.question[:50]}...'. Continuing."
+                )
+                continue
+
+            if processed_market.trades:
+                traded_markets += 1
+                logger.info(
+                    f"Placed trades on '{market.question[:50]}...'. "
+                    f"Progress: {traded_markets}/{self.bet_on_n_markets_per_run} traded markets."
+                )
+            else:
+                logger.info(
+                    f"Prediction generated for '{market.question[:50]}...', but no trades were placed. Continuing."
+                )
+                continue
+
+            if traded_markets == self.bet_on_n_markets_per_run:
+                logger.info(
+                    f"Reached target of {self.bet_on_n_markets_per_run} traded markets. Stopping."
+                )
+                break
+
+        logger.info(
+            f"All markets processed. Successfully placed trades on "
+            f"{traded_markets}/{self.bet_on_n_markets_per_run} target markets "
+            f"out of {len(available_markets)} fetched."
+        )
 
     def verify_market(self, market_type: MarketType, market: AgentMarket) -> bool:
         if not super().verify_market(market_type, market):
@@ -206,11 +255,25 @@ class DeployableLuxembourg1Agent(DeployableTraderAgent):
             )
             return None
 
-        # 3. Force p_yes to the agent's committed side so Kelly never bets opposite.
+        # 3. Skip same-side bets when the market is already more extreme than us.
+        market_p_yes = float(market.p_yes)
+        if p_yes_float >= 0.5 and p_yes_float <= market_p_yes + self.MARKET_EDGE_EPSILON:
+            logger.info(
+                f"Skipping '{market.question[:50]}...': Agent leans YES, but market is already at least as bullish "
+                f"(Agent={p_yes_float:.3f}, Market={market_p_yes:.3f})"
+            )
+            return None
+        if p_yes_float < 0.5 and p_yes_float >= market_p_yes - self.MARKET_EDGE_EPSILON:
+            logger.info(
+                f"Skipping '{market.question[:50]}...': Agent leans NO, but market is already at least as bearish "
+                f"(Agent={p_yes_float:.3f}, Market={market_p_yes:.3f})"
+            )
+            return None
+
+        # 4. Force p_yes to the agent's committed side so Kelly never bets opposite.
         # A tiny nudge (+/- 0.001) ensures p_yes is strictly on the correct side of
         # the market price, so Kelly sizes the bet in the direction the agent believes
         # without ever flipping direction due to a near-neutral spread.
-        market_p_yes = float(market.p_yes)
         if p_yes_float >= 0.5:
             committed_p_yes = max(p_yes_float, market_p_yes + 0.001)
         else:
